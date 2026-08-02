@@ -1,8 +1,11 @@
 import 'dotenv/config';
-import { generateText, ModelMessage, streamText } from 'ai';
+import { generateText, type ModelMessage, stepCountIs, streamText } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createMockModel } from './mock-model';
 import { createInterface } from 'node:readline';
+import { weatherTool, calculatorTool } from './tools/utility-tools';
+
+const tools = { get_weather: weatherTool, calculator: calculatorTool };
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -44,14 +47,29 @@ function ask(){
     // 之前传递的是单挑消息，模型没有记忆，现在把历史对话都带上，模型相当于有了记忆
     const result=streamText({
       model,
+      system: '你是 Super Agent，一个有工具调用能力的 AI 助手。需要时主动使用工具获取信息，不要编造数据。',
+      tools,
       messages,
+      // 最多进行5次循环
+      stopWhen:stepCountIs(5),
     });
 
     process.stdout.write('Assistant：');
     let fullResponse='';
-    for await(const chunk of result.textStream){
-    process.stdout.write(chunk);
-    fullResponse+=chunk;
+
+    for await(const part of result.fullStream){
+      switch (part.type){
+        case 'text-delta':
+          process.stdout.write(part.text);
+          fullResponse+=part.text;
+          break;
+        case 'tool-call':
+          console.log(`\n  [调用工具: ${part.toolName}(${JSON.stringify(part.input)})]`);
+          break;
+        case 'tool-result':
+          console.log(`  [工具返回: ${JSON.stringify(part.output)}]`);
+          break;
+      }
     }
     console.log();//换行
 
@@ -61,5 +79,5 @@ function ask(){
   })
 }
 
-console.log('Super Agent v0.1 (type "exit" to quit)\n');
+console.log('Super Agent v0.2 (type "exit" to quit)\n');
 ask();
