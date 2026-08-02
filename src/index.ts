@@ -4,7 +4,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createMockModel } from './mock-model';
 import { createInterface } from 'node:readline';
 import { weatherTool, calculatorTool } from './tools/utility-tools';
-import { agentLoop } from './agent/loop';
+import { agentLoop,type BudgetState } from './agent-loop';
 
 const tools = { get_weather: weatherTool, calculator: calculatorTool };
 
@@ -27,6 +27,8 @@ const r1=createInterface({
 });
 
 const messages:ModelMessage[]=[];
+//  预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
+const budget: BudgetState = { used: 0, limit: 15000 };
 
 const SYSTEM=`你是 Super Agent，一个有工具调用能力的 AI 助手。
 需要时主动使用工具获取信息，不要编造数据。`
@@ -47,7 +49,7 @@ function ask(){
     messages.push({role:"user",content:trimmed})
 
     // 使用自己定义的agent loop
-    await agentLoop(model, tools, messages, SYSTEM);
+    await agentLoop(model, tools, messages, SYSTEM,budget);
     
     // SDK版本
     // // 调用streamText时候，SDK发出一个stream的请求
@@ -87,6 +89,6 @@ function ask(){
     ask();
   })
 }
-
-console.log('Super Agent v0.2 (type "exit" to quit)\n');
+console.log('Super Agent v0.3 — Fuses (type "exit" to quit)\n');
+console.log('试试输入："测试死循环"、"测试重试"、"测试预算" 看三层防护效果\n');
 ask();

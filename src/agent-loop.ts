@@ -1,6 +1,7 @@
 import { streamText, type ModelMessage } from 'ai';
+import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js';
 
-const MAX_STEPS = 10;
+const MAX_STEPS = 15;
 
 export async function agentLoop(
   model: any,
@@ -20,10 +21,17 @@ export async function agentLoop(
       tools,
       messages,
       // 不设 stopWhen，每次只跑一步
+      // 失败时的重试次数
+      maxRetries: 0,
+      // 发生错误的回调函数
+      onError: () => {} 
     });
 
     let hasToolCall = false;
     let fullText = '';
+    let shouldBreak = false;
+    // 上次工具调用记录，没有调用过为null
+    let lastToolCall: { name: string; input: unknown } | null = null;
 
     for await (const part of result.fullStream) {
       switch (part.type) {
@@ -34,13 +42,36 @@ export async function agentLoop(
 
         case 'tool-call':
           hasToolCall = true;
+          lastToolCall = { name: part.toolName, input: part.input };
           console.log(`  [调用: ${part.toolName}(${JSON.stringify(part.input)})]`);
+          const detection=detect(part.toolName, part.input);
+          if (detection.stuck) {
+            // 卡住了就进入循环
+            console.log(`  ${detection.message}`);
+            if (detection.level === 'critical') {
+              shouldBreak = true;
+            } else {
+              messages.push({
+                role: 'user' as const,
+                content: `[系统提醒] ${detection.message}。请换一个思路解决问题，不要重复同样的操作。`,
+              });
+            }
+          }
+          recordCall(part.toolName, part.input);
           break;
 
         case 'tool-result':
           console.log(`  [结果: ${JSON.stringify(part.output)}]`);
+          if (lastToolCall) {
+            recordResult(lastToolCall.name, lastToolCall.input, part.output);
+          }
           break;
       }
+    }
+
+    if(shouldBreak){
+      console.log('\n[循环检测触发，Agent 已停止]');
+      break;
     }
 
     // 拿到这一步的完整结果，追加到消息历史
