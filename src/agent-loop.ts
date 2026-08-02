@@ -5,11 +5,17 @@ import { isRetryable, calculateDelay, sleep } from './retry.js';
 const MAX_STEPS = 15;
 const MAX_RETRIES = 3;
 
+export interface BudgetState {
+  used: number;
+  limit: number;
+}
+
 export async function agentLoop(
   model: any,
   tools: any,
   messages: ModelMessage[],
   system: string,
+  budget:BudgetState
 ) {
   let step = 0;
   resetHistory();
@@ -37,6 +43,7 @@ export async function agentLoop(
     let lastToolCall: { name: string; input: unknown } | null = null;
     // 使用ts工具把streamText 返回结果中 response 属性的类型拿到作为stepResponse类型
     let stepResponse: Awaited<ReturnType<typeof streamText>['response']>;
+    let stepUsage: Awaited<ReturnType<typeof streamText>['usage']>;
 
     // 步骤级重试：包裹整个 stream 消费过程
     for (let attempt = 1; ; attempt++) {
@@ -81,6 +88,7 @@ export async function agentLoop(
         }
 
         stepResponse = await result.response;
+        stepUsage = await result.usage;
         break;
       } catch (error) {
         if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error;
@@ -100,6 +108,20 @@ export async function agentLoop(
     }
 
     messages.push(...stepResponse!.messages);
+
+    // Token 预算追踪：budget 由调用方持有，跨轮持续累计
+    // 根据inputTokens可能的两种格式获得真正的token用量
+    // ??控制合并运算符，只有再左侧是undefinted或者null的时候取右边的
+    const inp = typeof stepUsage?.inputTokens === 'number' ? stepUsage.inputTokens : (stepUsage?.inputTokens?.total ?? 0);
+    const out = typeof stepUsage?.outputTokens === 'number' ? stepUsage.outputTokens : (stepUsage?.outputTokens?.total ?? 0);
+    budget.used += inp + out;
+    // 得到使用百分比
+    const pct = Math.round(budget.used / budget.limit * 100);
+    console.log(`  [Token] ${budget.used}/${budget.limit} (${pct}%)`);
+    if (budget.used > budget.limit) {
+      console.log('\n[Token 预算耗尽，强制停止]');
+      break;
+    }
 
     if (!hasToolCall) {
       if (fullText) console.log();

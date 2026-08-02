@@ -14,7 +14,7 @@ export interface ToolCallRecord {
 // 检测器种类，重复检测、乒乓检测、全局熔断 
 export type DetectorKind = 'generic_repeat' | 'ping_pong' | 'global_circuit_breaker';
 
-// 检测结果，正常或者可住了（谁检测出来的，严重程度，重复次数，人类刻度结果）
+// 检测结果，正常或者可住了（谁检测出来的，严重程度，重复次数，人类可读结果）
 export type DetectionResult =
   | { stuck: false }
   | { stuck: true; level: 'warning' | 'critical'; detector: DetectorKind; count: number; message: string };

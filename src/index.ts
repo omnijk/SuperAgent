@@ -28,6 +28,7 @@ const r1=createInterface({
 
 const messages:ModelMessage[]=[];
 //  预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
+// budget声明在模块顶层，跨多轮agent提问持续累积
 const budget: BudgetState = { used: 0, limit: 15000 };
 
 const SYSTEM=`你是 Super Agent，一个有工具调用能力的 AI 助手。

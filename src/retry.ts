@@ -36,11 +36,13 @@ export function isRetryable(error: unknown): boolean {
 //   baseMs = 500,      // 基础等待时间，默认500毫秒
 //   maxMs = 30000      // 最大等待时间，默认30秒
 export function calculateDelay(attempt: number, baseMs = 500, maxMs = 30000): number {
+  // 每次重试等待的时间翻倍
   const exponential = baseMs * Math.pow(2, attempt - 1);
 	// 取用两者时间的较小值，
   const capped = Math.min(exponential, maxMs);
   const jitterRange = capped * 0.25;
 	// 随机抖动，避免请求瀑布，惊群效应
+  // 设置一个随机偏移量，让请求分散
   const jittered = capped + (Math.random() * 2 - 1) * jitterRange;
   return Math.max(0, Math.round(jittered));
 }
