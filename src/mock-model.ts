@@ -61,7 +61,7 @@ function createDelayedStream(chunks: any[], delayMs = 30): ReadableStream {
 export function createMockModel() {
   return {
     // as const定义它是字面量类型，不是普通的字符串，后面不能再修改了
-    specificationVersion: 'v2' as const,
+    specificationVersion: 'v4' as const,
     provider: 'mock',
     modelId: 'mock-model',
     // gettre访问器属性，访问它的时候会执行后面的函数，返回一个promise对象
