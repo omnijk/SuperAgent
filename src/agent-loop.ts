@@ -1,9 +1,11 @@
 import { streamText, type ModelMessage } from 'ai';
+import { ToolRegistry } from './tool-registry.js';
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js';
 import { isRetryable, calculateDelay, sleep } from './retry.js';
 
 const MAX_STEPS = 15;
 const MAX_RETRIES = 3;
+const TOKEN_BUDGET = 50000;
 
 export interface BudgetState {
   used: number;
@@ -12,7 +14,8 @@ export interface BudgetState {
 
 export async function agentLoop(
   model: any,
-  tools: any,
+  // tools: any,
+  registry: ToolRegistry,
   messages: ModelMessage[],
   system: string,
   budget:BudgetState
@@ -27,7 +30,7 @@ export async function agentLoop(
     const result = streamText({
       model,
       system,
-      tools,
+      tools:registry.toAISDKFormat(),
       messages,
       // 不设 stopWhen，每次只跑一步
       // 失败时的重试次数，不要SDK接管了，自己来
@@ -48,7 +51,8 @@ export async function agentLoop(
     // 步骤级重试：包裹整个 stream 消费过程
     for (let attempt = 1; ; attempt++) {
       try {
-        const result = streamText({ model, system, tools, messages, maxRetries: 0, onError: () => {} });
+        // const result = streamText({ model, system, tools, messages, maxRetries: 0, onError: () => {} });
+        // 直接使用外层的streamText
 
         for await (const part of result.fullStream) {
           switch (part.type) {
