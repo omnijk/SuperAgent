@@ -12,6 +12,11 @@ export interface ToolDefinition {
 
 const DEFAULT_MAX_RESULT_CHARS = 3000;
 
+// 工具注册表类型
+// 1.集中注册工具
+// 2.按照名称查找工具
+// 3.批量获取工具
+// 4.转换格式为AI SDK
 export class ToolRegistry {
 	// 私有属性，键值对类型
   private tools = new Map<string, ToolDefinition>();
@@ -35,6 +40,7 @@ export class ToolRegistry {
     return Array.from(this.tools.values());
   }
 
+  // toAISDKFormat转换格式为SDK
   toAISDKFormat(): Record<string, any> {
     const result: Record<string, any> = {};
     // map的解构遍历
@@ -47,6 +53,7 @@ export class ToolRegistry {
         description: tool.description,
         // as any类型断言，以绕过类型检查
         inputSchema: jsonSchema(tool.parameters as any),
+        // 一个异步执行函数
         execute: async (input: any) => {
           const raw = await executeFn(input);
           const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
@@ -58,13 +65,19 @@ export class ToolRegistry {
   }
 }
 
+// 智能截断长文本：对用户比较友好
+// 最大字符数参数有默认值
 export function truncateResult(text: string, maxChars: number = DEFAULT_MAX_RESULT_CHARS): string {
+  // 没有超过限制，直接输出
   if (text.length <= maxChars) return text;
 
+  // 保留开头的字符数，为最大长度的0.6
+  // 尾部保留0.4
   const headSize = Math.floor(maxChars * 0.6);
   const tailSize = maxChars - headSize;
   const head = text.slice(0, headSize);
   const tail = text.slice(-tailSize);
+  // 计算被省略的字符数
   const dropped = text.length - headSize - tailSize;
 
   return `${head}\n\n... [省略 ${dropped} 字符] ...\n\n${tail}`;

@@ -1,17 +1,32 @@
 import 'dotenv/config';
-import { generateText, type ModelMessage, stepCountIs, streamText } from 'ai';
+import {  type ModelMessage } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createMockModel } from './mock-model';
 import { createInterface } from 'node:readline';
-import { weatherTool, calculatorTool } from './tools/utility-tools';
+import { ToolRegistry } from './tool-registry.js';
+import { allTools } from './tools.js';
 import { agentLoop,type BudgetState } from './agent-loop';
 
-const tools = { get_weather: weatherTool, calculator: calculatorTool };
+// const tools = { get_weather: weatherTool, calculator: calculatorTool };
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   apiKey: process.env.DASHSCOPE_API_KEY,
 });
+
+// 工具注册类的实例
+const registry=new ToolRegistry();
+// 传入一个工具数组，让它能够同时调用多个工具
+registry.register(...allTools);
+console.log(`已注册${registry.getAll().length}个工具`)
+// 输出工具的元数据定义
+for(const tool of registry.getAll()){
+  const flags=[
+    tool.isConcurrencySafe?"可并发":"串行",
+    tool.isReadOnly?"只读":"读写"
+  ].join(",");
+  console.log(`${tool.name}:(${flags})`);
+}
 
 // model变量的类型是AI SDK的统一接口
 // Provider 模式，接口统一切换模型方便
@@ -50,7 +65,7 @@ function ask(){
     messages.push({role:"user",content:trimmed})
 
     // 使用自己定义的agent loop
-    await agentLoop(model, tools, messages, SYSTEM,budget);
+    await agentLoop(model, registry,messages, SYSTEM,budget);
     
     // SDK版本
     // // 调用streamText时候，SDK发出一个stream的请求
