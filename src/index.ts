@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { ToolRegistry } from './tool-registry.js';
 import { allTools } from './tools.js';
 import { agentLoop,type BudgetState } from './agent-loop';
+import { MCPClient, MockMCPClient } from './mcp-client.js';
 
 // const tools = { get_weather: weatherTool, calculator: calculatorTool };
 
@@ -18,6 +19,7 @@ const qwen = createOpenAI({
 const registry=new ToolRegistry();
 // 传入一个工具数组，让它能够同时调用多个工具
 registry.register(...allTools);
+await connectMCP();
 console.log(`已注册${registry.getAll().length}个工具`)
 // 输出工具的元数据定义
 for(const tool of registry.getAll()){
@@ -75,6 +77,47 @@ const SYSTEM=`你是 Super Agent，一个能读代码、抓网页、生成项目
    - 最后用一段简短文本告诉用户：生成了哪些文件 + 预览地址
 
 回答简洁直接，独立的工具调用尽量并行执行。`
+
+
+async function connectMCP() {
+  const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+
+  let canSpawn = true;
+  // MCPClient 需要使用 spawn 启动子进程
+  // 判断一下环境是否支持
+  try {
+    const { execSync } = await import('node:child_process');
+    execSync('echo test', { stdio: 'ignore' });
+  } catch {
+    canSpawn = false;
+  }
+
+  if (githubToken && canSpawn) {
+    console.log('\n连接 GitHub MCP Server...');
+    try {
+      const client = new MCPClient(
+        // 使用npx命令安装并运行github mcp server
+        'npx.cmd', ['-y', '@modelcontextprotocol/server-github'],
+        { GITHUB_PERSONAL_ACCESS_TOKEN: githubToken },
+      );
+      // 注册server工具
+      const tools = await registry.registerMCPServer('github', client);
+      console.log(`  已注册 ${tools.length} 个 MCP 工具`);
+      return;
+    } catch (err) {
+      console.log(`  MCP 连接失败: ${err instanceof Error ? err.message : err}`);
+      console.log('  降级为 Mock MCP...');
+    }
+  }
+
+  if (!githubToken) {
+    console.log('\n未配置 GITHUB_PERSONAL_ACCESS_TOKEN，使用 Mock MCP');
+  }
+
+  const mockClient = new MockMCPClient();
+  const tools = await registry.registerMCPServer('github', mockClient);
+  console.log(`  已注册 ${tools.length} 个 Mock MCP 工具`);
+}
 
 function ask(){
   // question会在终端显示提示文字

@@ -1,4 +1,5 @@
 import { jsonSchema } from 'ai';
+import {MCPClient,MockMCPClient} from './mcp-client'
 
 export interface ToolDefinition {
   name: string;
@@ -135,6 +136,56 @@ export class ToolRegistry {
     }
     return result;
   }
+
+  // 添加方法用于连接mcp server，自动注册到resigter里
+  private mcpClients: Array<MCPClient | MockMCPClient> = [];
+
+  async registerMCPServer(
+    serverName: string,
+    client: MCPClient | MockMCPClient,
+  ): Promise<string[]> {
+    await client.connect();
+    this.mcpClients.push(client);
+
+    const tools = await client.listTools();
+    const registered: string[] = [];
+
+    for (const tool of tools) {
+      // 命名空间隔离，防止工具命名冲突
+      const prefixedName = `mcp__${serverName}__${tool.name}`;
+      if (this.tools.has(prefixedName)) continue;
+
+      const toolClient = client;
+      const originalName = tool.name;
+
+      this.register({
+        name: prefixedName,
+        // 加上前缀给自己看的，便于调试
+        description: `[MCP:${serverName}] ${tool.description}`,
+        parameters: tool.inputSchema as Record<string, unknown>,
+        isConcurrencySafe: true,
+        isReadOnly: true,
+        maxResultChars: 3000,
+        execute: async (input: any) => {
+          // 闭包，使用了外层作用域的变量
+          // callTool传递参数，发请求，等响应结果并且解析
+          return toolClient.callTool(originalName, input);
+        },
+      });
+
+      registered.push(prefixedName);
+    }
+
+    return registered;
+  }
+
+  async closeAllMCP(): Promise<void> {
+    for (const client of this.mcpClients) {
+      await client.close();
+    }
+    this.mcpClients = [];
+  }
+
 }
 
 // 智能截断长文本：对用户比较友好
