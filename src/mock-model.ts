@@ -105,9 +105,9 @@ function makeUsage(prompt: any[], outputChars = 80) {
 
 const TEXT_RESPONSES: Record<string, string> = {
   default:
-    '你好！我是 Super Agent v0.13——记忆库现在带 BM25 搜索、写入校验和 lint 体检。试试 "lint 记忆" 看看哪些记忆该清了。',
+    '你好！我是 Super Agent v0.14——现在支持 Skills 了。输入 /skill 看看有哪些可用的，或者直接 /code-review 试试。',
   greeting:
-    '你好！我是 Super Agent v0.13，已经升级了记忆维护机制 :) 你可以让我搜记忆、lint 记忆、或者带验证地保存新记忆。',
+    '你好！我是 Super Agent v0.14，支持 Skills 切换。试试 /code-review 进入代码审查模式 :)',
   memorySaved:
     '好的，我已经把这条信息存到记忆里了。下次你重新打开对话，我还会记得这件事。',
   memoryRecalled:

@@ -32,6 +32,8 @@ import { contextCommands } from './commands/context.js';
 import { memoryCommands } from './commands/memory.js';
 import { ragCommands } from './commands/rag.js';
 import { dreamCommands } from './commands/dream.js';
+import { SkillLoader } from './skills/loader.js';
+import { createSkillCommands } from './commands/skill.js';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -68,6 +70,11 @@ async function connectMCP() {
   console.log(`  已注册 ${tools.length} 个 Mock MCP 工具`);
 }
 
+// ── Skills ────────────────────────────────
+const skillLoader = new SkillLoader('.');
+const loadedSkills = skillLoader.load();
+const activeSkills = new Set<string>();
+
 // ── Commands ���───────────────────────────────
 const dispatch = createDispatcher([
   ...debugCommands,
@@ -75,6 +82,7 @@ const dispatch = createDispatcher([
   ...memoryCommands,
   ...ragCommands,
   ...dreamCommands,
+  ...createSkillCommands(skillLoader, activeSkills),
 ]);
 
 async function main() {
@@ -91,6 +99,7 @@ async function main() {
     .pipe('deferredTools', deferredTools())
     .pipe('memoryContext', memoryContext(memoryStore))
     .pipe('ragContext', ragContext(vectorStore))
+    .pipe('skillContext', () => skillLoader.buildPromptSection(activeSkills))
     .pipe('sessionContext', sessionContext());
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -137,16 +146,23 @@ async function main() {
     });
   }
 
-  console.log('Super Agent v0.13 — Memory Maintenance (type "exit" to quit)');
+  console.log('Super Agent v0.14 — Skills (type "exit" to quit)');
   console.log('快捷命令：');
-  console.log('  ingest <path>   — 导入文档到知识库');
-  console.log('  /rag            — 查看知识库状态');
-  console.log('  /memory         — 查看记忆（带 ⚠️ 标记）');
+  console.log('  /skill          — 查看可用的 skills');
+  console.log('  /skill load X   — 激活一个 skill');
+  console.log('  /code-review    — 直接激活并执行 code-review skill');
+  console.log('  /memory         — 查看记忆');
   console.log('  /lint           — 扫描记忆库');
-  console.log('  /dream          — 记忆整理（lint → 清理 → 合并 → 报告）');
+  console.log('  /dream          — 记忆整理');
   console.log('  /context        — context 占用矩阵');
   console.log('  status          — 当前状态');
   console.log('');
+
+  if (loadedSkills.length > 0) {
+    console.log(`  发现 ${loadedSkills.length} 个 skill：`);
+    for (const s of loadedSkills) console.log(`    /${s.name} — ${s.description}`);
+    console.log('');
+  }
 
   if (fs.existsSync('docs')) {
     const files = fs.readdirSync('docs').filter(f => f.endsWith('.md'));
