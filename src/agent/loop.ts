@@ -1,5 +1,5 @@
 import { streamText, type ModelMessage } from 'ai';
-import { ToolRegistry } from './tool-registry.js';
+import { ToolRegistry } from '../tools/registry';
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js';
 import { isRetryable, calculateDelay, sleep } from './retry.js';
 

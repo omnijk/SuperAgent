@@ -4,10 +4,10 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createMockModel } from './mock-model';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
-import { ToolRegistry,ToolDefinition } from './tool-registry.js';
-import { allTools } from './tools.js';
-import { agentLoop,type BudgetState } from './agent-loop';
-import { MCPClient, MockMCPClient } from './mcp-client.js';
+import { ToolRegistry,ToolDefinition } from './tools/registry.js';
+import { allTools } from './tools/index';
+import { agentLoop,type BudgetState } from './agent/loop';
+import { MCPClient, MockMCPClient } from './tools/mcp-client.js';
 
 
 const qwen = createOpenAI({
