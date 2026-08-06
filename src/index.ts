@@ -1,110 +1,186 @@
 import 'dotenv/config';
-import {  type ModelMessage } from 'ai';
+import fs from 'node:fs';
+import { type ModelMessage } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
-import { createMockModel } from './mock-model';
+import { createMockModel } from './mock-model.js';
 import { createInterface } from 'node:readline';
-import { ToolRegistry } from './tool-registry.js';
-import { allTools } from './tools.js';
-import { agentLoop,type BudgetState } from './agent-loop';
-
-// const tools = { get_weather: weatherTool, calculator: calculatorTool };
+import { ToolRegistry } from './tools/registry.js';
+import { allTools } from './tools/index.js';
+import { createToolSearchTool } from './tools/tool-search.js';
+import { createMemoryTool } from './tools/memory-tools.js';
+import { createRagTools } from './tools/rag-tools.js';
+import { MockMCPClient } from './tools/mcp-client.js';
+import { agentLoop } from './agent/loop.js';
+import { SessionStore } from './session/store.js';
+import {
+  PromptBuilder, coreRules, toolGuide, deferredTools, sessionContext,
+  type PromptContext,
+} from './context/prompt-builder.js';
+import { estimateMessageTokens } from './context/defense.js';
+import { UsageTracker } from './usage/tracker.js';
+import { MemoryStore } from './memory/store.js';
+import { memoryContext, ragContext } from './context/prompt-pipes.js';
+import { chunkDocument } from './rag/chunker.js';
+import { createMockEmbedder, createDashScopeEmbedder, embed } from './rag/embedder.js';
+// 本地内存数组存储RAG
+// import { VectorStore } from './rag/store.js';
+// sqlite存储RAG版
+import { SqliteVectorStore } from './rag/sqlite-store.js';
+import { createDispatcher, type CommandContext } from './commands/index.js';
+import { debugCommands } from './commands/debug.js';
+import { contextCommands } from './commands/context.js';
+import { memoryCommands } from './commands/memory.js';
+import { ragCommands } from './commands/rag.js';
+import { dreamCommands } from './commands/dream.js';
+import { SkillLoader } from './skills/loader.js';
+import { createSkillCommands } from './commands/skill.js';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   apiKey: process.env.DASHSCOPE_API_KEY,
 });
 
-// 工具注册类的实例
-const registry=new ToolRegistry();
-// 传入一个工具数组，让它能够同时调用多个工具
-registry.register(...allTools);
-console.log(`已注册${registry.getAll().length}个工具`)
-// 输出工具的元数据定义
-for(const tool of registry.getAll()){
-  const flags=[
-    tool.isConcurrencySafe?"可并发":"串行",
-    tool.isReadOnly?"只读":"读写"
-  ].join(",");
-  console.log(`${tool.name}:(${flags})`);
-}
-
-// model变量的类型是AI SDK的统一接口
-// Provider 模式，接口统一切换模型方便
 const model = process.env.DASHSCOPE_API_KEY
   ? qwen.chat('qwen-plus-latest')
   : createMockModel();
 
-const r1=createInterface({
-  // 输入流：绑定在键盘
-  input:process.stdin,
-  // 输出流：绑定在终端
-  output:process.stdout
-});
+// ── Registry ────────────────────────────────
+const registry = new ToolRegistry();
+registry.register(...allTools);
+registry.register(createToolSearchTool(registry));
 
-const messages:ModelMessage[]=[];
-//  预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
-// budget声明在模块顶层，跨多轮agent提问持续累积
-const budget: BudgetState = { used: 0, limit: 15000 };
+// ── Memory ──────────��─────────────────────
+const memoryStore = new MemoryStore('.');
+memoryStore.init();
+registry.register(createMemoryTool(memoryStore));
 
-const SYSTEM=`你是 Super Agent，一个有工具调用能力的 AI 助手。
-需要时主动使用工具获取信息，不要编造数据。`
+// ── RAG ──��─────────────────────────────
+// 本地内存数组存储RAG
+// const vectorStore = new VectorStore();
+// sqlite存储RAG版
+const vectorStore = new SqliteVectorStore('knowledge.db');
+const embedFn = process.env.DASHSCOPE_API_KEY
+  ? createDashScopeEmbedder(process.env.DASHSCOPE_API_KEY)
+  : createMockEmbedder();
+registry.register(...createRagTools(vectorStore, embedFn));
 
-function ask(){
-  // question会在终端显示提示文字
-  r1.question('\nYou：',async(input)=>{
-    // 处理输入消息
-    const trimmed=input.trim();
-    // 判断终止条件
-    if(!trimmed||trimmed==='exit'){
-      console.log('Bye!')
-      r1.close();
-      return;
-    }
-
-    // 加入消息列表
-    messages.push({role:"user",content:trimmed})
-
-    // 使用自己定义的agent loop
-    await agentLoop(model, registry,messages, SYSTEM,budget);
-    
-    // SDK版本
-    // // 调用streamText时候，SDK发出一个stream的请求
-    // // 不是等待全部输出完，而是每生成几个token，就通过sse推送一个事件
-    // // 之前传递的是单挑消息，模型没有记忆，现在把历史对话都带上，模型相当于有了记忆
-    // const result=streamText({
-    //   model,
-    //   system: SYSTEM,
-    //   tools,
-    //   messages,
-    //   // 最多进行5次循环
-    //   stopWhen:stepCountIs(5),
-    // })
-    // ;
-
-    // process.stdout.write('Assistant：');
-    // let fullResponse='';
-
-    // for await(const part of result.fullStream){
-    //   switch (part.type){
-    //     case 'text-delta':
-    //       process.stdout.write(part.text);
-    //       fullResponse+=part.text;
-    //       break;
-    //     case 'tool-call':
-    //       console.log(`\n  [调用工具: ${part.toolName}(${JSON.stringify(part.input)})]`);
-    //       break;
-    //     case 'tool-result':
-    //       console.log(`  [工具返回: ${JSON.stringify(part.output)}]`);
-    //       break;
-    //   }
-    // }
-    // console.log();//换行
-
-    // messages.push({role:"assistant",content:fullResponse})
-    // // 递归调用自己，形成循环
-    ask();
-  })
+async function connectMCP() {
+  const mockClient = new MockMCPClient();
+  const tools = await registry.registerMCPServer('github', mockClient);
+  console.log(`  已注册 ${tools.length} 个 Mock MCP 工具`);
 }
-console.log('Super Agent v0.3 — Fuses (type "exit" to quit)\n');
-console.log('试试输入："测试死循环"、"测试重试"、"测试预算" 看三层防护效果\n');
-ask();
+
+// ── Skills ────────────────────────────────
+const skillLoader = new SkillLoader('.');
+const loadedSkills = skillLoader.load();
+const activeSkills = new Set<string>();
+
+// ── Commands ���───────────────────────────────
+const dispatch = createDispatcher([
+  ...debugCommands,
+  ...contextCommands,
+  ...memoryCommands,
+  ...ragCommands,
+  ...dreamCommands,
+  ...createSkillCommands(skillLoader, activeSkills),
+]);
+
+async function main() {
+  await connectMCP();
+
+  const store = new SessionStore('default');
+  let messages: ModelMessage[] = [];
+  const timestamps = new Map<number, number>();
+  const tracker = new UsageTracker('.usage/today.jsonl');
+
+  const builder = new PromptBuilder()
+    .pipe('coreRules', coreRules())
+    .pipe('toolGuide', toolGuide())
+    .pipe('deferredTools', deferredTools())
+    .pipe('memoryContext', memoryContext(memoryStore))
+    .pipe('ragContext', ragContext(vectorStore))
+    .pipe('skillContext', () => skillLoader.buildPromptSection(activeSkills))
+    .pipe('sessionContext', sessionContext());
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+  function makePromptCtx(): PromptContext {
+    return {
+      toolCount: registry.getActiveTools().length,
+      deferredToolSummary: registry.getDeferredToolSummary(),
+      sessionMessageCount: messages.length,
+      sessionId: 'default',
+    };
+  }
+
+  function ask() {
+    rl.question('\nYou: ', async (input) => {
+      const trimmed = input.trim();
+      if (!trimmed || trimmed === 'exit') { console.log('Bye!'); rl.close(); return; }
+
+      const ctx: CommandContext = {
+        messages, timestamps, registry, builder, tracker,
+        sessionStore: store, model, makePromptCtx, ask,
+        memoryStore, vectorStore,
+      };
+      const handled = dispatch(trimmed, ctx);
+      if (handled === 'async') return;
+      if (handled) { ask(); return; }
+
+      const userMsg: ModelMessage = { role: 'user', content: trimmed };
+      messages.push(userMsg);
+      timestamps.set(messages.length - 1, Date.now());
+      store.append(userMsg);
+
+      const currentSystem = builder.build(makePromptCtx());
+      const beforeLen = messages.length;
+      await agentLoop(model, registry, messages, currentSystem, tracker);
+
+      const newMessages = messages.slice(beforeLen);
+      const now = Date.now();
+      for (let i = beforeLen; i < messages.length; i++) timestamps.set(i, now);
+      store.appendAll(newMessages);
+
+      console.log(`  [Token] ~${estimateMessageTokens(messages)} tokens`);
+      ask();
+    });
+  }
+
+  console.log('Super Agent v0.14 — Skills (type "exit" to quit)');
+  console.log('快捷命令：');
+  console.log('  /skill          — 查看可用的 skills');
+  console.log('  /skill load X   — 激活一个 skill');
+  console.log('  /code-review    — 直接激活并执行 code-review skill');
+  console.log('  /memory         — 查看记忆');
+  console.log('  /lint           — 扫描记忆库');
+  console.log('  /dream          — 记忆整理');
+  console.log('  /context        — context 占用矩阵');
+  console.log('  status          — 当前状态');
+  console.log('');
+
+  if (loadedSkills.length > 0) {
+    console.log(`  发现 ${loadedSkills.length} 个 skill：`);
+    for (const s of loadedSkills) console.log(`    /${s.name} — ${s.description}`);
+    console.log('');
+  }
+
+  if (fs.existsSync('docs')) {
+    const files = fs.readdirSync('docs').filter(f => f.endsWith('.md'));
+    if (files.length > 0) {
+      console.log(`  发现 ${files.length} 个文档，自动导入知识库...`);
+      for (const f of files) {
+        const path = `docs/${f}`;
+        const text = fs.readFileSync(path, 'utf-8');
+        const chunks = chunkDocument(path, text);
+        const embeddings = await embed(embedFn, chunks.map(c => c.text));
+        vectorStore.addBatch(chunks.map((c, i) => ({ chunk: c, embedding: embeddings[i] })));
+        console.log(`    ${f} → ${chunks.length} 个片段`);
+      }
+      console.log(`  知识库就绪，共 ${vectorStore.size()} 个片段\n`);
+    }
+  }
+
+  ask();
+}
+
+main().catch(console.error);
