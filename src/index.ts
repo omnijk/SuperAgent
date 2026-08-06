@@ -8,6 +8,7 @@ import { ToolRegistry,ToolDefinition } from './tools/registry.js';
 import { allTools } from './tools/index';
 import { agentLoop,type BudgetState } from './agent/loop';
 import { MCPClient, MockMCPClient } from './tools/mcp-client.js';
+import {SessionStore} from './session/store'
 
 
 const qwen = createOpenAI({
@@ -43,10 +44,23 @@ const r1=createInterface({
   output:process.stdout
 });
 
-const messages:ModelMessage[]=[];
+// Session 持久化
+const isContinue = process.argv.includes('--continue');
+const store = new SessionStore('default');
+
+
+
+let messages:ModelMessage[]=[];
 //  预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
 // budget声明在模块顶层，跨多轮agent提问持续累积
 const budget: BudgetState = { used: 0, limit: 50000 };
+
+if (isContinue && store.exists()) {
+  messages = store.load();
+  console.log(`[Session] 恢复会话，${messages.length} 条历史消息`);
+} else {
+  console.log(`[Session] 新会话`);
+}
 
 const SYSTEM=`你是 Super Agent，一个能读代码、抓网页、生成项目的 AI 助手。
 你有这些工具可用：read_file, write_file, list_directory, edit_file, glob, grep, bash, fetch_url, start_preview, get_weather, calculator。
@@ -161,47 +175,16 @@ function ask(){
       return;
     }
 
-    // 加入消息列表
-    messages.push({role:"user",content:trimmed})
+    // 分为用户消息和模型回复消息，分别加入到消息队列中，同时存储起来
+    const userMsg: ModelMessage = { role: 'user', content: trimmed };
+    messages.push(userMsg);
+    store.append(userMsg);
 
-    // 使用自己定义的agent loop
-    await agentLoop(model, registry,messages, SYSTEM,budget);
-    
-    // SDK版本
-    // // 调用streamText时候，SDK发出一个stream的请求
-    // // 不是等待全部输出完，而是每生成几个token，就通过sse推送一个事件
-    // // 之前传递的是单挑消息，模型没有记忆，现在把历史对话都带上，模型相当于有了记忆
-    // const result=streamText({
-    //   model,
-    //   system: SYSTEM,
-    //   tools,
-    //   messages,
-    //   // 最多进行5次循环
-    //   stopWhen:stepCountIs(5),
-    // })
-    // ;
+    const before = messages.length;
+    await agentLoop(model, registry, messages, SYSTEM, budget);
+    // slice复制数组元素，从before索引开始的，所以能拿到新增的用户消息和模型回复，追加在末尾
+    store.appendAll(messages.slice(before));
 
-    // process.stdout.write('Assistant：');
-    // let fullResponse='';
-
-    // for await(const part of result.fullStream){
-    //   switch (part.type){
-    //     case 'text-delta':
-    //       process.stdout.write(part.text);
-    //       fullResponse+=part.text;
-    //       break;
-    //     case 'tool-call':
-    //       console.log(`\n  [调用工具: ${part.toolName}(${JSON.stringify(part.input)})]`);
-    //       break;
-    //     case 'tool-result':
-    //       console.log(`  [工具返回: ${JSON.stringify(part.output)}]`);
-    //       break;
-    //   }
-    // }
-    // console.log();//换行
-
-    // messages.push({role:"assistant",content:fullResponse})
-    // // 递归调用自己，形成循环
     ask();
   })
 }
