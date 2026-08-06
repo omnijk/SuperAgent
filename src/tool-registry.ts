@@ -8,6 +8,9 @@ export interface ToolDefinition {
   isConcurrencySafe?: boolean;
   isReadOnly?: boolean;
   maxResultChars?: number;
+  // 两个用于实现工具延迟加载的字段
+  shouldDefer?: boolean;    // 是否延迟加载
+  searchHint?: string;      // 搜索提示词，帮助 ToolSearch 匹配
   execute: (input: any) => Promise<unknown>;
 }
 
@@ -33,6 +36,9 @@ export class ToolRegistry {
   // 数组中的每一个元素都是函数，函数的参数和返回值都为空
   private waitQueue:Array<()=>void>=[];
 
+  // 用于存储已经发现的工具集合，使用set
+  private discoveredTools = new Set<string>();
+
   // ...tools把传入的多个参数手机到一个数组中
   // 可以让调用方一次性注册多个工具
   register(...tools: ToolDefinition[]): void {
@@ -51,6 +57,83 @@ export class ToolRegistry {
     // Array.from静态方法：用于将迭代器转换成真正的数组
     return Array.from(this.tools.values());
   }
+
+  // 用于控制哪些工具可以进入到prompt中
+  getActiveTools(): ToolDefinition[] {
+    return this.getAll().filter(tool => {
+      // 延迟工具唯一输出的办法就是，已经被toolSearch发现过
+      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  // 生成所有延迟工具的名字列表以及是干嘛的
+  // 延迟工具的schame参数定义不进prompt
+  getDeferredToolSummary(): string {
+    const deferred = this.getAll().filter(tool => {
+      return tool.shouldDefer && !this.discoveredTools.has(tool.name);
+    });
+
+    if (deferred.length === 0) return '';
+
+    const lines = deferred.map(t => {
+      const hint = t.searchHint ? ` — ${t.searchHint}` : '';
+      return `  - ${t.name}${hint}`;
+    });
+
+    return `\n以下工具可用，但需要先通过 tool_search 搜索获取完整定义：\n${lines.join('\n')}`;
+  }
+
+  // 用于搜索工具
+  // 通过名称匹配查找，返回一个或者多个工具
+  searchTools(query: string): ToolDefinition[] {
+    const q = query.trim();
+    const results: ToolDefinition[] = [];
+
+    // 支持逗号分隔的多个工具名，如 "mcp__github__list_issues,mcp__github__search_repositories"
+    const names = q.includes(',')
+      ? q.split(',').map(n => n.trim()).filter(Boolean)
+      : [q];
+
+    for (const name of names) {
+      const tool = this.tools.get(name);
+      if (tool && tool.name !== 'tool_search') {
+        results.push(tool);
+        this.discoveredTools.add(tool.name);
+      }
+    }
+
+    return results;
+  }
+
+  // 估算工具占用的tokens
+  countTokenEstimate(): { active: number; deferred: number; total: number } {
+    let active = 0;
+    let deferred = 0;
+
+    // 遍历工具注册表
+    for (const tool of this.tools.values()) {
+      // 计算这些工具的描述占用多少字符，并除以4，向上取整，按照英文中的4哥字符占用一个token算
+      const schemaSize = JSON.stringify({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      }).length;
+      const tokens = Math.ceil(schemaSize / 4);
+
+      // 延迟且没有被搜索的工具加入延迟的token中，否则加入活跃的token中
+      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        deferred += tokens;
+      } else {
+        active += tokens;
+      }
+    }
+
+    return { active, deferred, total: active + deferred };
+  }
+
 
   // 获取共享锁
   // 只要没人独占就能拿，多个只读工具可以同时持有
@@ -96,8 +179,10 @@ export class ToolRegistry {
   // toAISDKFormat转换格式为SDK
   toAISDKFormat(): Record<string, any> {
     const result: Record<string, any> = {};
+    // 只输出活跃工具的schema，不活跃的不输出这一部分
+    const activeTools = this.getActiveTools();
     // map的解构遍历
-    for (const [name, tool] of this.tools) {
+    for (const tool of activeTools) {
       // 最大字符数限制
       const maxChars = tool.maxResultChars;
       // 原始的执行函数
@@ -105,7 +190,7 @@ export class ToolRegistry {
       const isSafe = tool.isConcurrencySafe === true;
       const registry = this;
 
-      result[name] = {
+      result[tool.name] = {
         description: tool.description,
         // as any类型断言，以绕过类型检查
         inputSchema: jsonSchema(tool.parameters as any),
@@ -113,10 +198,10 @@ export class ToolRegistry {
         execute: async (input: any) => {
           if (isSafe) {
             await registry.acquireConcurrent();
-            console.log(`  [并发] ${name} 获取共享锁`);
+            console.log(`  [并发] ${tool.name} 获取共享锁`);
           } else {
             await registry.acquireExclusive();
-            console.log(`  [串行] ${name} 获取独占锁，等待其他工具完成`);
+            console.log(`  [串行] ${tool.name} 获取独占锁，等待其他工具完成`);
           }
           try {
             const raw = await executeFn(input);
@@ -164,7 +249,10 @@ export class ToolRegistry {
         description: `[MCP:${serverName}] ${tool.description}`,
         parameters: tool.inputSchema as Record<string, unknown>,
         isConcurrencySafe: true,
-        isReadOnly: true,
+        isReadOnly: true,      
+        // mcp-server工具默认延迟，因为你不知道用户接入的server包含多少工具
+        shouldDefer: true, // 是否延迟加载
+        searchHint:  `${serverName} ${tool.name} ${tool.description}`,   // 搜索提示词，帮助 ToolSearch 匹配
         maxResultChars: 3000,
         execute: async (input: any) => {
           // 闭包，使用了外层作用域的变量

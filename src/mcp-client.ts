@@ -31,7 +31,12 @@ export class MCPClient {
   private serverName: string;
 
   // 接受启动命令command，命令参数args，可选的环境变量
-  constructor(private command: string, private args: string[], private env?: Record<string, string>) {
+  constructor(
+    private command: string,
+    private args: string[],
+    private env?: Record<string, string>,
+    private cwd: string = process.cwd(),
+  ) {
     // 从参数中提取出来服务器名称，但是有一个默认值mcp-server
     this.serverName = args[args.length - 1]?.replace(/^@.*\//, '') || 'mcp-server';
   }
@@ -45,15 +50,28 @@ export class MCPClient {
       stdio: ['pipe', 'pipe', 'pipe'],
       // 合并环境变量
       env: { ...process.env, ...this.env },
+      cwd: this.cwd,
       shell: true,
     });
 
     this.process.on('error', (err) => {
-      console.error(`  [MCP] 进程启动失败: ${err.message}`);
+      const message = `[MCP] 进程启动失败: ${err.message}`;
+      console.error(`  ${message}`);
+      this.failAll(new Error(message));
     });
 
-    // 丢弃stderr输出
-    this.process.stderr?.on('data', () => {});
+    this.process.on('exit', (code, signal) => {
+      if (this.pending.size > 0) {
+        this.failAll(new Error(`[MCP] 进程退出: code=${code}, signal=${signal ?? 'none'}`));
+      }
+    });
+
+    // // 丢弃stderr输出
+    // this.process.stderr?.on('data', () => {});
+    // 打印stderr输出用于调试
+    this.process.stderr?.on('data', (data: Buffer) => {
+      console.log(`  [MCP Server stderr] ${data.toString().trim()}`);
+    });
 
     this.rl = createInterface({ input: this.process.stdout! });
     this.rl.on('line', (line) => {
@@ -97,8 +115,11 @@ export class MCPClient {
       const id = ++this.requestId;
       // 设置15秒如果没有响应，自动超时
       const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`MCP request timeout: ${method}`));
+        const p = this.pending.get(id);
+        if (p) {
+          this.pending.delete(id);
+          p.reject(new Error(`MCP request timeout: ${method}`));
+        }
       }, 15000);
 
       // 吧peomise的回调函数注册到pending。等待connect()中的line来调用
@@ -111,6 +132,13 @@ export class MCPClient {
       const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params });
       this.process!.stdin!.write(msg + '\n');
     });
+  }
+
+  private failAll(error: Error): void {
+    for (const p of this.pending.values()) {
+      p.reject(error);
+    }
+    this.pending.clear();
   }
 
   // 向server请求所有的工具列表
