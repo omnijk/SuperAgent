@@ -112,3 +112,7 @@ TTL 修剪前先检查工具结果是否包含 error、失败、不存在 等错
 ### 17.单次调用
 
 不要用cache，因为写入cache更贵，对于多次对话的话，使用cache，可以省钱
+
+### 18.tsconfig
+
+NodeNext 或 Bundler 模式下，TypeScript 默认要求导入路径带上运行时的扩展名（即 .js），如果你直接写 .ts，就会报错。
