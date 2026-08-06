@@ -1,3 +1,23 @@
+/**
+ * Mock Model v0.10 — 模拟 prompt cache 行为
+ *
+ * 拿 system + tools 的指纹做"前缀稳定性"判断：
+ * - 第一次见的 prefix → 全部记 cacheWrite
+ * - 跟上一次一模一样 → 全部记 cacheRead
+ * - prefix 变了（system 改了、工具增减、注入了时间戳）→ 又一次 cacheWrite
+ *
+ * 这样在 /context、/usage 视图里能直观看到 cache 命中率随对话推进上涨。
+ */
+
+let retryTestCount = 0;
+let lastPrefixHash: string | null = null;
+let cacheEnabled = true;
+
+export function setCacheEnabled(enabled: boolean): void {
+  cacheEnabled = enabled;
+  if (!enabled) lastPrefixHash = null;
+}
+
 // 存储一些回复内容，对象，键值对的形式存储在对象中
 const RESPONSES: Record<string, string> = {
   default: '你好！我是模拟模型。填了 DASHSCOPE_API_KEY 后会自动切换到真实的 Qwen。',

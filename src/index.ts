@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { type ModelMessage } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
-import { createMockModel } from './mock-model.js';
+import { createMockModel, setCacheEnabled } from './mock-model.js';
 import { createInterface } from 'node:readline';
 import { ToolRegistry, type ToolDefinition } from './tools/registry.js';
 import { allTools } from './tools/index.js';
@@ -17,6 +17,8 @@ import {
   truncateToolResults, ttlPrune, applyDefense,
 } from './context/defense.js';
 import { textToolResultOutput } from './context/tool-result-output.js';
+import { UsageTracker } from './usage/tracker.js';
+import { buildContextSnapshot, renderContextView, renderUsageView } from './context/view.js';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -86,31 +88,10 @@ async function main() {
   const store = new SessionStore('default');
   let messages: ModelMessage[] = [];
   const timestamps = new Map<number, number>();
-  const tracker = new TokenTracker();
+  const tracker = new UsageTracker('.usage/today.jsonl');
 
-  // Inject fake history with varied ages
-  injectFakeHistory(messages, timestamps);
-  tracker.addMessages(messages);
-  console.log(`\n[Session] 新会话（已注入 ${messages.length} 条模拟历史，时间跨度 12 分钟）`);
-
-  // Apply three-layer defense
-  const beforeTokens = estimateMessageTokens(messages);
-  console.log(`\n=== 三层即时防线 ===`);
-  console.log(`[防线前] ${messages.length} 条消息, ~${beforeTokens} tokens`);
-
-  const defense = applyDefense(messages, timestamps);
-  tracker.replaceMessages(messages, defense.messages);
-  messages = defense.messages;
-  console.log(`[Layer 2: 截断] ${defense.truncated} 个超长结果被截断`);
-  console.log(`[Layer 3: TTL] ${defense.softPruned} 个软修剪, ${defense.hardPruned} 个硬清除`);
-  console.log(`[防线后] ${messages.length} 条消息, ~${defense.tokenEstimate} tokens (节省 ${beforeTokens - defense.tokenEstimate})`);
-  console.log(`====================\n`);
-
-  // Clear injected history for chat — defense demo is done,
-  // start fresh so mock model works properly
-  tracker.replaceMessages(messages, []);
-  messages = [];
-  timestamps.clear();
+  // sa-10 主题是 cache 和成本，启动时直接进入空对话
+  // 上一节的三层即时防线还在 context-defense.ts 里，每轮 apply 不变
 
   const builder = new PromptBuilder()
     .pipe('coreRules', coreRules())
@@ -134,7 +115,6 @@ async function main() {
 
     if (cmd === '模拟长对话' || cmd === 'sim') {
       console.log('\n[模拟] 注入 20 条历史消息（含大量工具结果）...');
-      const beforeLen = messages.length;
       for (let i = 0; i < 5; i++) {
         const age = (20 - i * 4) * 60 * 1000;
         const userIdx = messages.length;
@@ -148,7 +128,6 @@ async function main() {
         messages.push({ role: 'assistant', content: [{ type: 'text' as const, text: `文件 file-${i}.ts 的内容已读取。` }] });
         timestamps.set(userIdx + 3, now - age);
       }
-      tracker.addMessages(messages.slice(beforeLen));
       const tokens = estimateMessageTokens(messages);
       console.log(`[模拟完成] ${messages.length} 条消息, ~${tokens} tokens\n`);
       return true;
@@ -158,7 +137,6 @@ async function main() {
       console.log('\n--- 执行三层防线 ---');
       const before = estimateMessageTokens(messages);
       const def = applyDefense(messages, timestamps);
-      tracker.replaceMessages(messages, def.messages);
       messages = def.messages;
       console.log(`  [Layer 2] 截断: ${def.truncated} 条, 预算清理: ${def.compacted} 条`);
       console.log(`  [Layer 3] 软修剪: ${def.softPruned}, 硬清除: ${def.hardPruned}`);
@@ -167,9 +145,41 @@ async function main() {
     }
 
     if (cmd === '查看状态' || cmd === 'status') {
-      const status = tracker.status;
+      const tokens = estimateMessageTokens(messages);
       const toolMsgs = messages.filter(m => m.role === 'tool').length;
-      console.log(`\n[状态] ${messages.length} 条消息 (${toolMsgs} 条工具结果), ~${status.tokens} tokens (${status.percent}%)\n`);
+      console.log(`\n[状态] ${messages.length} 条消息 (${toolMsgs} 条工具结果), ~${tokens} tokens\n`);
+      return true;
+    }
+
+    // /context: 终端可视化的 context 占用，参考 Claude Code 的 /context
+    if (cmd === '/context' || cmd === 'context') {
+      const snapshot = buildContextSnapshot({
+        modelName: process.env.DASHSCOPE_API_KEY ? 'Qwen Plus' : 'Mock Model (开发用)',
+        modelId: process.env.DASHSCOPE_API_KEY ? 'qwen3-6-plus' : 'mock-model',
+        windowTokens: 1_000_000,
+        systemPromptChars: SYSTEM.length,
+        toolDescriptionChars: registry.getActiveTools().reduce((a, t) => a + t.name.length + (t.description?.length || 0) + JSON.stringify(t.parameters || {}).length, 0),
+        memoryChars: 0,
+        skillsChars: 0,
+        messages,
+      });
+      console.log(renderContextView(snapshot));
+      return true;
+    }
+
+    if (cmd === '/usage' || cmd === 'usage') {
+      console.log(renderUsageView(tracker));
+      return true;
+    }
+
+    if (cmd === '/cache off' || cmd === 'cache off') {
+      setCacheEnabled(false);
+      console.log('\n  \x1b[38;5;220m⚠ 已关闭 cache 模拟\x1b[0m  接下来每次请求都按 cache miss 计算\n');
+      return true;
+    }
+    if (cmd === '/cache on' || cmd === 'cache on') {
+      setCacheEnabled(true);
+      console.log('\n  \x1b[38;5;36m✓ 已开启 cache 模拟\x1b[0m\n');
       return true;
     }
 
@@ -192,17 +202,11 @@ async function main() {
 
       const userMsg: ModelMessage = { role: 'user', content: trimmed };
       messages.push(userMsg);
-      tracker.addMessage(userMsg);
       timestamps.set(messages.length - 1, Date.now());
       store.append(userMsg);
 
-      // Apply all three defense layers before every model turn.
-      const turnDefense = applyDefense(messages, timestamps);
-      tracker.replaceMessages(messages, turnDefense.messages);
-      messages = turnDefense.messages;
-
       const beforeLen = messages.length;
-      await agentLoop(model, registry, messages, SYSTEM);
+      await agentLoop(model, registry, messages, SYSTEM, tracker);
 
       const newMessages = messages.slice(beforeLen);
       const now = Date.now();
@@ -211,18 +215,34 @@ async function main() {
       }
       store.appendAll(newMessages);
 
-      const status = tracker.status;
-      console.log(`  [Token] ~${status.tokens} tokens (${status.percent}%)`);
+      // Apply defense after each turn
+      const status = estimateMessageTokens(messages);
+      console.log(`  [Token] ~${status} tokens`);
 
       ask();
     });
   }
 
-  console.log('Super Agent v0.9 — Context Defense (type "exit" to quit)');
+  console.log('Super Agent v0.10 — Cache & Cost (type "exit" to quit)');
   console.log('快捷命令：');
-  console.log('  模拟长对话 / sim    — 注入 20 条模拟历史（含大工具结果）');
-  console.log('  执行防线 / defend   — 执行三层防线，查看截断和修剪效果');
-  console.log('  查看状态 / status   — 查看当前消息数和 token 估算\n');
+  console.log('  /context    — 终端里看 context 占用矩阵（参考 Claude Code）');
+  console.log('  /usage      — 累计 token 用量、cache 命中率、节省金额');
+  console.log('  /cache off  — 关闭 cache 模拟，对比开 vs 关的成本差');
+  console.log('  /cache on   — 重新开启 cache 模拟');
+  console.log('  status      — 当前消息数和 token 估算');
+
+  // 启动时直接秀一次 /context，让用户立刻看到初始上下文构成
+  const startupSnapshot = buildContextSnapshot({
+    modelName: process.env.DASHSCOPE_API_KEY ? 'Qwen Plus' : 'Mock Model (开发用)',
+    modelId: process.env.DASHSCOPE_API_KEY ? 'qwen3-6-plus' : 'mock-model',
+    windowTokens: 1_000_000,
+    systemPromptChars: SYSTEM.length,
+    toolDescriptionChars: registry.getActiveTools().reduce((a, t) => a + t.name.length + (t.description?.length || 0) + JSON.stringify(t.parameters || {}).length, 0),
+    memoryChars: 0,
+    skillsChars: 0,
+    messages,
+  });
+  console.log(renderContextView(startupSnapshot));
   ask();
 }
 
