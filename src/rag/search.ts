@@ -140,7 +140,7 @@ function normalizeViaSigmoid(scores: number[]): number[] {
 
 // ── MMR deduplication ──────────────────────
 // 既要保证相关性0.7又要保证多样性0.3，结合得到一个综合的分数，分数越高越好
-function mmrSelect(results: SearchResult[], topK: number): SearchResult[] {
+export function mmrSelect(results: SearchResult[], topK: number): SearchResult[] {
   if (results.length <= topK) return results;
 
   const selected: SearchResult[] = [results[0]];

@@ -22,7 +22,10 @@ import { MemoryStore } from './memory/store.js';
 import { memoryContext, ragContext } from './context/prompt-pipes.js';
 import { chunkDocument } from './rag/chunker.js';
 import { createMockEmbedder, createDashScopeEmbedder, embed } from './rag/embedder.js';
-import { VectorStore } from './rag/store.js';
+// 本地内存数组存储RAG
+// import { VectorStore } from './rag/store.js';
+// sqlite存储RAG版
+import { SqliteVectorStore } from './rag/sqlite-store.js';
 import { createDispatcher, type CommandContext } from './commands/index.js';
 import { debugCommands } from './commands/debug.js';
 import { contextCommands } from './commands/context.js';
@@ -49,7 +52,10 @@ memoryStore.init();
 registry.register(createMemoryTool(memoryStore));
 
 // ── RAG ──��─────────────────────────────
-const vectorStore = new VectorStore();
+// 本地内存数组存储RAG
+// const vectorStore = new VectorStore();
+// sqlite存储RAG版
+const vectorStore = new SqliteVectorStore('knowledge.db');
 const embedFn = process.env.DASHSCOPE_API_KEY
   ? createDashScopeEmbedder(process.env.DASHSCOPE_API_KEY)
   : createMockEmbedder();
