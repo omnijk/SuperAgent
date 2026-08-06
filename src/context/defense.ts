@@ -174,19 +174,23 @@ export function truncateToolResults(
 }
 
 // ── Layer 3: TTL Pruning ─────────────────────────────
-
+// TTL剪枝：空间维度上的修复，越早的工具价值越低
+// 修剪得配置对应得数据类型
 interface TTLConfig {
   softTTLMs: number;
   hardTTLMs: number;
+	// 软修剪得时候头部尾部保留多少字符
   keepHeadTail: number;
 }
 
+// 默认配置
 const DEFAULT_TTL: TTLConfig = {
   softTTLMs: 5 * 60 * 1000,    // 5 minutes
   hardTTLMs: 10 * 60 * 1000,   // 10 minutes
   keepHeadTail: 1500,           // chars to keep in soft prune
 };
 
+// 修剪之后得消息什么样，软修剪了多少条，硬修剪了多少条
 export interface PruneResult {
   messages: ModelMessage[];
   softPruned: number;
@@ -195,6 +199,7 @@ export interface PruneResult {
 
 export function ttlPrune(
   messages: ModelMessage[],
+	// 消息索引到时间戳得映射表，便于计时
   timestamps: Map<number, number>,
   config: TTLConfig = DEFAULT_TTL,
 ): PruneResult {
@@ -204,6 +209,7 @@ export function ttlPrune(
 
   const result = messages.map((msg, idx) => {
     // Only prune tool results, never user/assistant messages
+		// 只修剪tool角色得消息，根据映射拿到消息产生得时间，如果不存在，旧不清理这一条
     if (msg.role !== 'tool' || !Array.isArray(msg.content)) return msg;
 
     const ts = timestamps.get(idx);
@@ -212,12 +218,14 @@ export function ttlPrune(
     const age = now - ts;
 
     // Preserve error experiences — never prune failed tool results
+		// 失败得工具调用消息不删除，后面模型还要使用到这些策略，弯路只走一遍
     const outputText = (msg.content as any[])
       .map((p: any) => p.output ? toolResultOutputToText(p.output) : '')
       .join('');
     const isError = /error|失败|不存在|denied|refused|timeout/i.test(outputText);
     if (isError) return msg;
 
+		// 硬清理，完全替换工具调用得输出
     // Hard clear: replace entire content with placeholder
     if (age >= config.hardTTLMs) {
       hardPruned++;
@@ -231,6 +239,7 @@ export function ttlPrune(
       };
     }
 
+		// 软清理，保留头部和尾部，中间丢掉
     // Soft prune: keep head + tail, replace middle
     if (age >= config.softTTLMs) {
       const newContent = msg.content.map((part: any) => {
