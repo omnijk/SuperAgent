@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export interface MemoryEntry {
+  // 四类记忆以及存储位置
   name: string;
   description: string;
   type: 'user' | 'feedback' | 'project' | 'reference';
@@ -38,6 +39,7 @@ export class MemoryStore {
     }
   }
 
+  // 存储记忆
   save(entry: Omit<MemoryEntry, 'filePath'>): string {
     this.init();
     const slug = entry.name
