@@ -1,5 +1,5 @@
 import type { ToolDefinition } from './registry.js';
-import { weatherTool, calculatorTool,fetchUrlTool } from './utility-tools.js';
+import { weatherTool, calculatorTool } from './utility-tools.js';
 import { readFileTool, writeFileTool, editFileTool, listDirectoryTool } from './file-tools.js';
 import { globTool, grepTool } from './search-tools.js';
 import { bashTool } from './shell-tools.js';
@@ -18,7 +18,6 @@ export const allTools: ToolDefinition[] = [
   bashTool,
   pickSearchTool(),
   webFetchTool,
-  fetchUrlTool,
   startPreviewTool,
 ];
 

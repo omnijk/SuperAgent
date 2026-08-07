@@ -48,6 +48,12 @@ export class ToolRegistry {
     }
   }
 
+  // 卸载某个工具
+  unregister(name: string): boolean {
+    this.discoveredTools.delete(name);
+    return this.tools.delete(name);
+  }
+
   // 根据工具的名字拿到对应的值（工具定义）
   get(name: string): ToolDefinition | undefined {
     return this.tools.get(name);
