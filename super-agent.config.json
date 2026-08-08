@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "model": {
+    "provider": "dashscope",
+    "name": "qwen-plus-latest",
+    "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "apiKey": "${DASHSCOPE_API_KEY}"
+  },
+  "plugins": [
+    { "name": "supabase", "enabled": false, "config": {} }
+  ],
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "appId": "${FEISHU_APP_ID}",
+      "appSecret": "${FEISHU_APP_SECRET}",
+      "port": 3000
+    }
+  },
+  "agents": {
+    "maxSpawnDepth": 1,
+    "maxConcurrent": 3,
+    "defaultTimeout": 60000
+  },
+  "security": {
+    "defaultRole": "developer",
+    "auditLog": true,
+    "bashTimestamp": true
+  },
+  "cron": { "enabled": true, "dataDir": "." },
+  "rag": { "enabled": true, "docsDir": "docs" }
+}

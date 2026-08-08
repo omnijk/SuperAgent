@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "bin": {
+    "super-agent": "src/index.ts"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "init": "tsx src/index.ts init",
     "continue": "tsx src/index.ts --continue",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -30,7 +34,8 @@
     "dotenv": "^17.4.2",
     "hono": "^4.13.0",
     "sqlite-vec": "^0.1.9",
-    "turndown": "^7.2.4"
+    "turndown": "^7.2.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
