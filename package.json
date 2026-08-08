@@ -22,9 +22,12 @@
   "type": "module",
   "dependencies": {
     "@ai-sdk/openai": "^4.0.27",
+    "@hono/node-server": "^2.1.0",
+    "@larksuiteoapi/node-sdk": "^1.72.0",
     "ai": "^7.0.47",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2",
+    "hono": "^4.13.0",
     "sqlite-vec": "^0.1.9",
     "turndown": "^7.2.4"
   },
