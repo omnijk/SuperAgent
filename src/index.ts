@@ -44,6 +44,9 @@ import { createChannelCommands } from './commands/channel.js';
 import { HookPipeline } from './security/hooks.js';
 import { classifyBashCommand } from './security/bash-classifier.js';
 import { createSecurityCommands } from './commands/security.js';
+import { CronService } from './cron/service.js';
+import { createCronTool } from './tools/corn-tools.js';
+import { createCronCommands } from './commands/cron.js';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -136,6 +139,10 @@ const feishuChannel = new FeishuChannel({
 });
 gateway.register(feishuChannel);
 
+// ── Cron Service ────────────────────────────────
+const cronService = new CronService('.');
+registry.register(createCronTool(cronService));
+
 // ── Commands ────────────────────────────────
 const dispatch = createDispatcher([
   ...debugCommands,
@@ -147,6 +154,7 @@ const dispatch = createDispatcher([
   ...createPluginCommands(pluginManager, availablePlugins),
   ...createChannelCommands(gateway),
   ...createSecurityCommands(registry, hookPipeline),
+  ...createCronCommands(cronService),
 ]);
 
 function makePromptCtx(): PromptContext {
@@ -160,27 +168,42 @@ function makePromptCtx(): PromptContext {
 
 async function main() {
   await connectMCP();
-
-  // 加载插件
   console.log('  加载插件...');
   for (const [name, def] of availablePlugins) {
-    try {
-      const tools = await pluginManager.load(def);
-      console.log(`  ✓ ${name} — ${tools.length} 个工具`);
-    } catch {
-      console.log(`  ✗ ${name} — 加载失败`);
-    }
+    try { const tools = await pluginManager.load(def); console.log(`  ✓ ${name} — ${tools.length} 个工具`); }
+    catch { console.log(`  ✗ ${name} — 加载失败`); }
   }
 
-  // 启动 Channel
   console.log('  启动 Channel...');
   await gateway.startAll();
+
+  cronService.load();
+  cronService.setExecutor({
+    runAgentPrompt: async (prompt, timeout) => {
+      const cronMessages: ModelMessage[] = [{ role: 'user', content: prompt }];
+      const system = builder.build(makePromptCtx());
+      await agentLoop(model, registry, cronMessages, system);
+      const lastMsg = cronMessages[cronMessages.length - 1];
+      if (!lastMsg) return '(无输出)';
+      if (typeof lastMsg.content === 'string') return lastMsg.content;
+      if (Array.isArray(lastMsg.content)) {
+        return lastMsg.content
+          .filter((p: any) => p.type === 'text')
+          .map((p: any) => p.text)
+          .join('') || '(无输出)';
+      }
+      return String(lastMsg.content);
+    },
+    notify: (message) => { console.log(`\n${message}`); },
+  });
+  cronService.start();
+  const cronJobs = cronService.list();
+  console.log(`  Cron: ${cronJobs.length} 个任务已加载`);
 
   const store = new SessionStore('default');
   let messages: ModelMessage[] = [];
   const timestamps = new Map<number, number>();
   const tracker = new UsageTracker('.usage/today.jsonl');
-
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   function ask() {
@@ -188,17 +211,13 @@ async function main() {
       const trimmed = input.trim();
       if (!trimmed || trimmed === 'exit') {
         console.log('Bye!');
+        cronService.stop();
         await gateway.stopAll();
         await pluginManager.unloadAll();
         rl.close();
         return;
       }
-
-      const ctx: CommandContext = {
-        messages, timestamps, registry, builder, tracker,
-        sessionStore: store, model, makePromptCtx, ask,
-        memoryStore, vectorStore,
-      };
+      const ctx: CommandContext = { messages, timestamps, registry, builder, tracker, sessionStore: store, model, makePromptCtx, ask, memoryStore, vectorStore };
       const handled = dispatch(trimmed, ctx);
       if (handled === 'async') return;
       if (handled) { ask(); return; }
@@ -216,27 +235,31 @@ async function main() {
       const now = Date.now();
       for (let i = beforeLen; i < messages.length; i++) timestamps.set(i, now);
       store.appendAll(newMessages);
-
       console.log(`  [Token] ~${estimateMessageTokens(messages)} tokens`);
       ask();
     });
   }
 
-  console.log('Super Agent v0.16 — Channel (type "exit" to quit)');
-  console.log('快捷命令：');
-  console.log('  /channel         — 查看通道状态');
-  console.log('  /plugin          — 查看插件');
-  console.log('  /skill           — 查看 skills');
-  console.log('  /memory          — 查看记忆');
-  console.log('  /context         — context 占用矩阵');
-  console.log('');
-  console.log(`  Dashboard: http://localhost:${FEISHU_PORT}`);
-  console.log('  打开浏览器发送测试消息，或在终端直接对话');
-  console.log('');
+  const role = registry.getRole();
+  const toolCount = registry.getActiveTools().length;
+  const hooks = hookPipeline.list();
 
-  if (loadedSkills.length > 0) {
-    console.log(`  发现 ${loadedSkills.length} 个 skill`);
-  }
+  console.log('Super Agent v0.18 — Cron 定时任务 (type "exit" to quit)');
+  console.log('快捷命令：');
+  console.log('  /cron             — 查看定时任务');
+  console.log('  /cron logs        — 查看执行记录');
+  console.log('  /role [角色]      — 查看/切换角色');
+  console.log('  /hooks            — 查看 Hook 管线');
+  console.log('');
+  console.log(`  当前角色: ${role}，可用工具: ${toolCount} 个`);
+  console.log(`  Hook: ${hooks.pre.length} 个 pre + ${hooks.post.length} 个 post`);
+  console.log(`  Cron: ${cronJobs.length} 个定时任务`);
+  console.log('');
+  console.log('  试试：');
+  console.log('    让 Agent 创建一个每 30 秒执行的定时任务');
+  console.log('    /cron         — 查看当前任务列表');
+  console.log('    /cron logs    — 查看执行记录');
+  console.log('');
 
   if (fs.existsSync('docs')) {
     const files = fs.readdirSync('docs').filter(f => f.endsWith('.md'));
@@ -252,15 +275,6 @@ async function main() {
       console.log(`  知识库就绪，共 ${vectorStore.size()} 个片段\n`);
     }
   }
-
-  const role = registry.getRole();
-  const toolCount = registry.getActiveTools().length;
-  const hooks = hookPipeline.list();
-
-  console.log(`  当前角色: ${role}，可用工具: ${toolCount} 个`);
-  console.log(`  Hook: ${hooks.pre.length} 个 pre + ${hooks.post.length} 个 post`);
-
-
   ask();
 }
 
