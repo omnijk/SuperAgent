@@ -41,6 +41,9 @@ import type { PluginDefinition } from './plugins/types.js';
 import { ChannelGateway } from './channels/gateway.js';
 import { FeishuChannel } from './channels/feishu.js';
 import { createChannelCommands } from './commands/channel.js';
+import { HookPipeline } from './security/hooks.js';
+import { classifyBashCommand } from './security/bash-classifier.js';
+import { createSecurityCommands } from './commands/security.js';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -88,6 +91,26 @@ const availablePlugins = new Map<string, PluginDefinition>([
   ['supabase', supabasePlugin],
 ]);
 
+const hookPipeline = new HookPipeline();
+
+hookPipeline.registerPre('audit-log', (toolName, input) => {
+  if (toolName === 'write_file' || toolName === 'edit_file') {
+    const path = (input as any)?.path || 'unknown';
+    console.log(`  [audit] 文件写入操作: ${toolName} → ${path}`);
+  }
+  return { action: 'allow' };
+});
+
+hookPipeline.registerPost('bash-timestamp', (toolName, _input, output) => {
+  if (toolName === 'bash') {
+    const timestamp = new Date().toISOString();
+    return { action: 'modify', modifiedOutput: `[${timestamp}]\n${output}` };
+  }
+  return { action: 'allow' };
+});
+
+registry.setHookPipeline(hookPipeline);
+
 // ── Prompt Builder ────────────────────────────────
 const builder = new PromptBuilder()
   .pipe('coreRules', coreRules())
@@ -123,6 +146,7 @@ const dispatch = createDispatcher([
   ...createSkillCommands(skillLoader, activeSkills),
   ...createPluginCommands(pluginManager, availablePlugins),
   ...createChannelCommands(gateway),
+  ...createSecurityCommands(registry, hookPipeline),
 ]);
 
 function makePromptCtx(): PromptContext {
@@ -228,6 +252,14 @@ async function main() {
       console.log(`  知识库就绪，共 ${vectorStore.size()} 个片段\n`);
     }
   }
+
+  const role = registry.getRole();
+  const toolCount = registry.getActiveTools().length;
+  const hooks = hookPipeline.list();
+
+  console.log(`  当前角色: ${role}，可用工具: ${toolCount} 个`);
+  console.log(`  Hook: ${hooks.pre.length} 个 pre + ${hooks.post.length} 个 post`);
+
 
   ask();
 }
