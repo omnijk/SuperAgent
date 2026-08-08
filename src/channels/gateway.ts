@@ -1,7 +1,7 @@
 import type { ModelMessage } from 'ai';
 import type { ChannelDefinition, IncomingMessage, OutgoingMessage } from './type';
 import type { ToolRegistry } from '../tools/registry.js';
-import { agentLoop } from '../agent/loop.js';
+import { agentLoop } from '../agents/loop.js';
 
 // agent和其他平台之间的消息交互都要通过Gateway
 // 模型拿到消息和工具注册表和构建提示词的函数

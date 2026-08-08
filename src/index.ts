@@ -10,7 +10,7 @@ import { createToolSearchTool } from './tools/tool-search.js';
 import { createMemoryTool } from './tools/memory-tools.js';
 import { createRagTools } from './tools/rag-tools.js';
 import { MockMCPClient } from './tools/mcp-client.js';
-import { agentLoop } from './agent/loop.js';
+import { agentLoop } from './agents/loop.js';
 import { SessionStore } from './session/store.js';
 import {
   PromptBuilder, coreRules, toolGuide, deferredTools, sessionContext,
@@ -47,6 +47,10 @@ import { createSecurityCommands } from './commands/security.js';
 import { CronService } from './cron/service.js';
 import { createCronTool } from './tools/corn-tools.js';
 import { createCronCommands } from './commands/cron.js';
+import { SubAgentRegistry } from './agents/registry.js';
+import { createSpawnTool } from './tools/spawn-tools.js';
+import { createAgentCommands } from './commands/agent.js';
+import type { SpawnContext } from './agents/spawn.js';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -143,6 +147,21 @@ gateway.register(feishuChannel);
 const cronService = new CronService('.');
 registry.register(createCronTool(cronService));
 
+// ── Sub-Agent ────────────────────────────────
+const agentRegistry = new SubAgentRegistry({ maxSpawnDepth: 1, maxConcurrent: 3 });
+
+function getSpawnCtx(): SpawnContext {
+  return {
+    model,
+    registry,
+    agentRegistry,
+    buildSystem: () => builder.build(makePromptCtx()),
+    currentDepth: 0,
+  };
+}
+
+registry.register(createSpawnTool(agentRegistry, getSpawnCtx));
+
 // ── Commands ────────────────────────────────
 const dispatch = createDispatcher([
   ...debugCommands,
@@ -155,6 +174,7 @@ const dispatch = createDispatcher([
   ...createChannelCommands(gateway),
   ...createSecurityCommands(registry, hookPipeline),
   ...createCronCommands(cronService),
+  ...createAgentCommands(agentRegistry),
 ]);
 
 function makePromptCtx(): PromptContext {

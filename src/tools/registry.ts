@@ -296,6 +296,72 @@ export class ToolRegistry {
     }
     return result;
   }
+
+  toAISDKFormatUnlocked(exclude?: Set<string>): Record<string, any> {
+  const result: Record<string, any> = {};
+  const activeTools = this.getActiveTools();
+
+  for (const tool of activeTools) {
+    // 排除指定的工具（如 spawn_agent）
+    if (exclude?.has(tool.name)) continue;
+
+    const maxChars = tool.maxResultChars;
+    const executeFn = tool.execute;
+    const registry = this;
+    const hookPipeline = registry.hookPipeline;
+    const toolName = tool.name;
+
+    result[tool.name] = {
+      description: tool.description,
+      inputSchema: jsonSchema(tool.parameters as any),
+      execute: async (input: any) => {
+        // Bash 风险检测（保留安全机制）
+        if (toolName === 'bash' && input?.command) {
+          const risk = classifyBashCommand(input.command);
+          if (risk.level === 'dangerous') {
+            return `[拒绝执行] 检测到危险操作: ${risk.reason}\n命令: ${input.command}`;
+          }
+          if (risk.level === 'moderate') {
+            console.log(`  [安全] ⚠ ${risk.reason}: ${input.command}`);
+          }
+        }
+
+        // Pre Hook（保留安全钩子）
+        if (hookPipeline) {
+          const preResult = await hookPipeline.runPre(toolName, input);
+          if (preResult.action === 'block') {
+            return `[Hook 拦截] ${preResult.reason || '操作被阻止'}`;
+          }
+          if (preResult.action === 'modify' && preResult.modifiedInput !== undefined) {
+            input = preResult.modifiedInput;
+          }
+        }
+
+        // ⚡ 关键区别：不加锁！直接执行
+        // 子代理独立运行，不需要等待父代理的锁
+        try {
+          const raw = await executeFn(input);
+          const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
+          let output = truncateResult(text, maxChars);
+
+          // Post Hook（保留安全钩子）
+          if (hookPipeline) {
+            const postResult = await hookPipeline.runPost(toolName, input, output);
+            if (postResult.modifiedOutput !== undefined) {
+              output = String(postResult.modifiedOutput);
+            }
+          }
+
+          return output;
+        } catch (err: any) {
+          // 子代理的错误直接返回，不抛异常
+          return `[工具执行错误] ${err.message || String(err)}`;
+        }
+      },
+    };
+  }
+  return result;
+}
 }
 
 export function truncateResult(text: string, maxChars: number = DEFAULT_MAX_RESULT_CHARS): string {

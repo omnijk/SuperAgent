@@ -1,5 +1,5 @@
 import { type ModelMessage } from 'ai';
-import { agentLoop } from '../agent/loop.js';
+import { agentLoop } from '../agents/loop.js';
 import type { CommandHandler } from './index.js';
 import type { SkillLoader } from '../skills/loader.js';
 
